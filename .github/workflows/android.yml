@@ -1,19 +1,19 @@
-name: Compilar IMPERIO BPM Studio APK
+name: Build APK Android
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main, master]
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
-  build-apk:
-    name: Build APK Android
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Descargar código del repositorio
+      - name: Descargar repositorio
         uses: actions/checkout@v4
 
       - name: Configurar Java 17
@@ -23,17 +23,48 @@ jobs:
           java-version: '17'
 
       - name: Configurar Gradle 8.9
-        uses: gradle/gradle-build-action@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
+      - name: Preparar proyecto Android
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Caso 1: el proyecto ya está extraído en la raíz del repositorio.
+          if [[ -f settings.gradle.kts || -f settings.gradle ]]; then
+            PROJECT_DIR="$GITHUB_WORKSPACE"
+          else
+            # Caso 2: el repositorio contiene el ZIP del proyecto.
+            ZIP_FILE="$(find . -maxdepth 2 -type f -iname '*.zip' -print -quit)"
+            if [[ -z "$ZIP_FILE" ]]; then
+              echo "::error::No se encontró settings.gradle(.kts) ni un ZIP del proyecto."
+              echo "Sube el ZIP del proyecto a la raíz del repositorio o extrae sus archivos allí."
+              exit 1
+            fi
+
+            mkdir -p "$RUNNER_TEMP/imperio-project"
+            unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/imperio-project"
+
+            SETTINGS_FILE="$(find "$RUNNER_TEMP/imperio-project" -type f \( -name settings.gradle.kts -o -name settings.gradle \) -print -quit)"
+            if [[ -z "$SETTINGS_FILE" ]]; then
+              echo "::error::El ZIP no contiene settings.gradle ni settings.gradle.kts."
+              exit 1
+            fi
+            PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          fi
+
+          echo "Proyecto encontrado en: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
       - name: Compilar APK de depuración
-        run: gradle --no-daemon :app:assembleDebug
+        run: gradle --no-daemon -p "$PROJECT_DIR" :app:assembleDebug
 
       - name: Publicar APK como artefacto
         uses: actions/upload-artifact@v4
         with:
           name: IMPERIO-BPM-STUDIO-APK-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
